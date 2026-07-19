@@ -1,5 +1,33 @@
-.venv
+# Virtual Environment
+.venv/
+venv/
+
+# Environment variables
 .env
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ChromaDB (vector store)
+chroma_db/
+
+# Temporary files
+*.log
 summary.md
 context.md
-/models/*
+
+# Models 
+models/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
