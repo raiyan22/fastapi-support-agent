@@ -6,12 +6,19 @@ import re
 
 from app.core.config import settings
 from app.models.schemas import ChatRequest, ChatResponse
-from app.agent.tools import create_support_ticket, escalate_to_human, get_ticket
+
+# Import all tools
+from app.agent.tools import (
+    create_support_ticket, 
+    escalate_to_human, 
+    get_ticket,
+    search_knowledge_tool
+)
 
 app = FastAPI(
     title="Local AI Customer Support Agent",
-    description="Fully local AI Customer Support Agent using llama.cpp + Phi-4-mini",
-    version="0.3.0"
+    description="Fully local AI Customer Support Agent using llama.cpp + Phi-4-mini + RAG",
+    version="0.4.0"
 )
 
 app.add_middleware(
@@ -32,30 +39,39 @@ conversations: Dict[str, List[dict]] = {}
 
 SYSTEM_PROMPT = """You are a professional Customer Support Agent named Alex.
 
-You can use the following tools when needed:
+You have access to these tools:
 
-1. create_support_ticket
-   - Use when the customer has a problem that needs to be tracked.
+1. search_knowledge_tool
+   - Use when the customer asks about policies, returns, shipping, products, FAQs, etc.
+   - Format: TOOL: search_knowledge_tool | query: <question>
+
+2. create_support_ticket
+   - Use when the customer has a problem that needs tracking.
    - Format: TOOL: create_support_ticket | issue: <description>
 
-2. escalate_to_human
-   - Use when you cannot solve the issue or the customer asks for a human.
+3. escalate_to_human
+   - Use when issue is complex or customer requests human.
    - Format: TOOL: escalate_to_human | reason: <reason>
 
-3. get_ticket
-   - Use when the customer asks about a ticket status.
+4. get_ticket
+   - Use when customer asks about existing ticket status.
    - Format: TOOL: get_ticket | ticket_id: <id>
 
 Rules:
-- Be polite, clear and professional.
-- Only use a tool when necessary.
-- If you use a tool, output ONLY the tool call in the format above (nothing else).
-- After receiving the tool result, give a helpful final answer to the customer.
+- Be polite, helpful, and professional.
+- First try to answer using search_knowledge_tool if it's about company info.
+- Only output the TOOL call when you decide to use a tool. Do not add extra text.
+- After getting tool result, give a friendly final response.
 """
 
 def parse_tool_call(text: str):
     """Parse tool call from model response"""
     text = text.strip()
+
+    # Search knowledge
+    match = re.search(r"TOOL:\s*search_knowledge_tool\s*\|\s*query:\s*(.+)", text, re.IGNORECASE)
+    if match:
+        return "search_knowledge_tool", {"query": match.group(1).strip()}
 
     # create_support_ticket
     match = re.search(r"TOOL:\s*create_support_ticket\s*\|\s*issue:\s*(.+)", text, re.IGNORECASE)
@@ -74,8 +90,11 @@ def parse_tool_call(text: str):
 
     return None, None
 
+
 def execute_tool(tool_name: str, params: dict) -> str:
-    if tool_name == "create_support_ticket":
+    if tool_name == "search_knowledge_tool":
+        return search_knowledge_tool(query=params["query"])
+    elif tool_name == "create_support_ticket":
         return create_support_ticket(issue=params["issue"])
     elif tool_name == "escalate_to_human":
         return escalate_to_human(reason=params["reason"])
@@ -83,10 +102,11 @@ def execute_tool(tool_name: str, params: dict) -> str:
         return get_ticket(ticket_id=params["ticket_id"])
     return "Unknown tool"
 
+
 @app.get("/")
 def root():
     return {
-        "message": "Local AI Customer Support Agent is running",
+        "message": "Local AI Customer Support Agent with RAG is running",
         "model": settings.LLM_MODEL,
         "docs": "/docs"
     }
@@ -105,69 +125,46 @@ def chat(request: ChatRequest):
                 {"role": "system", "content": SYSTEM_PROMPT}
             ]
 
-        # Add user message
         conversations[conv_id].append({
             "role": "user",
             "content": request.message
         })
 
-        # First call to the model
+        # Call LLM
         response = client.chat.completions.create(
             model=settings.LLM_MODEL,
             messages=conversations[conv_id],
             temperature=0.4,
-            max_tokens=500,
+            max_tokens=600,
         )
 
         reply = response.choices[0].message.content.strip()
 
-        # Check if the model wants to use a tool
         tool_name, params = parse_tool_call(reply)
 
         if tool_name:
-            # Execute the tool
             tool_result = execute_tool(tool_name, params)
 
-            # Add tool result to conversation
-            conversations[conv_id].append({
-                "role": "assistant",
-                "content": reply
-            })
-            conversations[conv_id].append({
-                "role": "user",
-                "content": f"Tool result: {tool_result}"
-            })
+            # Add to history
+            conversations[conv_id].append({"role": "assistant", "content": reply})
+            conversations[conv_id].append({"role": "user", "content": f"Tool result: {tool_result}"})
 
-            # Second call so the model can give a final answer
+            # Final response
             final_response = client.chat.completions.create(
                 model=settings.LLM_MODEL,
                 messages=conversations[conv_id],
                 temperature=0.5,
-                max_tokens=500,
+                max_tokens=600,
             )
 
             final_reply = final_response.choices[0].message.content.strip()
+            conversations[conv_id].append({"role": "assistant", "content": final_reply})
 
-            conversations[conv_id].append({
-                "role": "assistant",
-                "content": final_reply
-            })
+            return ChatResponse(reply=final_reply, conversation_id=conv_id)
 
-            return ChatResponse(
-                reply=final_reply,
-                conversation_id=conv_id
-            )
-
-        # No tool was used
-        conversations[conv_id].append({
-            "role": "assistant",
-            "content": reply
-        })
-
-        return ChatResponse(
-            reply=reply,
-            conversation_id=conv_id
-        )
+        # No tool used
+        conversations[conv_id].append({"role": "assistant", "content": reply})
+        return ChatResponse(reply=reply, conversation_id=conv_id)
 
     except Exception as e:
         return ChatResponse(
