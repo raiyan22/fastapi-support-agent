@@ -1,0 +1,5 @@
+.venv
+.env
+summary.md
+context.md
+/models/*
