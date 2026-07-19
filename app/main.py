@@ -1,14 +1,16 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import OpenAI
 from typing import Dict, List
 from contextlib import asynccontextmanager
 import re
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import delete
 
 from app.core.config import settings
-from app.models.schemas import ChatRequest, ChatResponse
+from app.models.schemas import ChatRequest, ChatResponse, ConversationDB
 from app.db import init_db, get_db
+from app.routers.documents import router as documents_router
 
 from app.agent.tools import (
     create_support_ticket,
@@ -39,6 +41,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(documents_router)
+
 client = OpenAI(
     base_url=settings.LLM_BASE_URL,
     api_key=settings.LLM_API_KEY,
@@ -46,31 +50,43 @@ client = OpenAI(
 
 conversations: Dict[str, List[dict]] = {}
 
-SYSTEM_PROMPT = """You are a professional Customer Support Agent named Alex.
+SYSTEM_PROMPT = """You are Alex, a customer support agent. You MUST use tools — never just talk about using them.
 
-You have access to these tools:
+WHEN THE CUSTOMER HAS A PROBLEM (complaint, bug, broken item, issue):
+You MUST output EXACTLY this on its own line (nothing else):
+TOOL: create_support_ticket | issue: <short description>
 
-1. search_knowledge_tool
-   - Use when the customer asks about policies, returns, shipping, products, FAQs, etc.
-   - Format: TOOL: search_knowledge_tool | query: <question>
+WHEN THE CUSTOMER ASKS ABOUT POLICIES, SHIPPING, RETURNS, FAQS, OR ANY COMPANY INFO:
+You MUST output EXACTLY this on its own line (nothing else):
+TOOL: search_knowledge_tool | query: <search keywords>
 
-2. create_support_ticket
-   - Use when the customer has a problem that needs tracking.
-   - Format: TOOL: create_support_ticket | issue: <description>
+WHEN THE CUSTOMER ASKS FOR A HUMAN OR THE ISSUE IS TOO COMPLEX:
+You MUST output EXACTLY this on its own line (nothing else):
+TOOL: escalate_to_human | reason: <why>
 
-3. escalate_to_human
-   - Use when issue is complex or customer requests human.
-   - Format: TOOL: escalate_to_human | reason: <reason>
+WHEN THE CUSTOMER ASKS ABOUT A TICKET OR PROVIDES A TICKET ID:
+You MUST output EXACTLY this on its own line (nothing else):
+TOOL: get_ticket | ticket_id: <id>
 
-4. get_ticket
-   - Use when customer asks about existing ticket status.
-   - Format: TOOL: get_ticket | ticket_id: <id>
+EXAMPLES OF CORRECT BEHAVIOR:
 
-Rules:
-- Be polite, helpful, and professional.
-- First try to answer using search_knowledge_tool if it's about company info.
-- Only output the TOOL call when you decide to use a tool. Do not add extra text.
-- After getting tool result, give a friendly final response.
+Customer: My order arrived broken
+Assistant: TOOL: create_support_ticket | issue: Order arrived broken
+
+Customer: What is your return policy?
+Assistant: TOOL: search_knowledge_tool | query: return policy
+
+Customer: I want to talk to a real person
+Assistant: TOOL: escalate_to_human | reason: Customer requested human agent
+
+Customer: What is the status of TICKET-ABC123?
+Assistant: TOOL: get_ticket | ticket_id: TICKET-ABC123
+
+RULES:
+- Output ONLY the TOOL line when using a tool. Nothing before, nothing after.
+- Do not say "I will create a ticket" — just output the TOOL line.
+- Do not ask for more details — create the ticket with whatever info the customer gave you.
+- After receiving a tool result, give a short 1-2 sentence friendly reply.
 """
 
 
@@ -106,6 +122,17 @@ async def execute_tool(session: AsyncSession, tool_name: str, params: dict) -> s
     elif tool_name == "get_ticket":
         return await get_ticket(session, ticket_id=params["ticket_id"])
     return "Unknown tool"
+
+
+async def save_conversation(session: AsyncSession, session_id: str, user_message: str, assistant_message: str, ticket_id: str | None = None):
+    entry = ConversationDB(
+        session_id=session_id,
+        user_message=user_message,
+        assistant_message=assistant_message,
+        ticket_id=ticket_id,
+    )
+    session.add(entry)
+    await session.commit()
 
 
 @app.get("/")
@@ -163,9 +190,11 @@ async def chat(request: ChatRequest, session: AsyncSession = Depends(get_db)):
             final_reply = final_response.choices[0].message.content.strip()
             conversations[conv_id].append({"role": "assistant", "content": final_reply})
 
+            await save_conversation(session, conv_id, request.message, final_reply)
             return ChatResponse(reply=final_reply, conversation_id=conv_id)
 
         conversations[conv_id].append({"role": "assistant", "content": reply})
+        await save_conversation(session, conv_id, request.message, reply)
         return ChatResponse(reply=reply, conversation_id=conv_id)
 
     except Exception as e:
@@ -173,3 +202,28 @@ async def chat(request: ChatRequest, session: AsyncSession = Depends(get_db)):
             reply=f"Sorry, something went wrong: {str(e)}",
             conversation_id=request.conversation_id,
         )
+
+
+@app.get("/chat/{session_id}")
+async def get_conversation(session_id: str, session: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+    result = await session.execute(
+        select(ConversationDB).where(ConversationDB.session_id == session_id).order_by(ConversationDB.timestamp)
+    )
+    rows = result.scalars().all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="No messages found for this session")
+    return [
+        {"user": r.user_message, "assistant": r.assistant_message, "timestamp": str(r.timestamp)}
+        for r in rows
+    ]
+
+
+@app.delete("/chat/{session_id}")
+async def delete_conversation(session_id: str, session: AsyncSession = Depends(get_db)):
+    result = await session.execute(
+        delete(ConversationDB).where(ConversationDB.session_id == session_id)
+    )
+    await session.commit()
+    in_memory = conversations.pop(session_id, None)
+    return {"deleted_db_rows": result.rowcount, "deleted_in_memory": in_memory is not None}

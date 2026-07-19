@@ -1,28 +1,49 @@
 # Virtual Environment
 .venv/
 venv/
+env/
+ENV/
 
 # Environment variables
 .env
+.env.local
+.env.*.local
 
-# Python cache
+# Python cache & bytecode
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
 *.pyc
 *.pyo
 *.pyd
 
-# ChromaDB (vector store)
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# ChromaDB
 chroma_db/
 
-# SQLite database
+# Database
 support_agent.db
+*.db
 
-# Temporary files
+# Uploaded documents
+data/knowledge/
+
+# Logs & temp
 *.log
+*.tmp
+.tmp/
 summary.md
 context.md
+MEMORY.md
 
-# Models 
+# Models
 models/
 
 # IDE / Editor
@@ -30,7 +51,12 @@ models/
 .idea/
 *.swp
 *.swo
-
-# OS
 .DS_Store
 Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Coverage
+.coverage
+htmlcov/

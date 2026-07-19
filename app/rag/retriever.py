@@ -1,8 +1,9 @@
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from typing import List, Dict
+from pathlib import Path
 
-CHROMA_PERSIST_DIR = "../chroma_db"
+CHROMA_PERSIST_DIR = str(Path(__file__).resolve().parent.parent.parent / "chroma_db")
 COLLECTION_NAME = "support_knowledge"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
