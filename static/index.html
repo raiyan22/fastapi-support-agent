@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Support Agent - Alex</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f0f0f; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+
+  header { background: #1a1a2e; padding: 12px 20px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid #2a2a3e; }
+  header .logo { width: 36px; height: 36px; background: #00d4aa; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #0f0f0f; font-size: 16px; }
+  header .info h1 { font-size: 16px; font-weight: 600; }
+  header .info span { font-size: 12px; color: #888; }
+  header .status { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #00d4aa; }
+  header .status::before { content: ''; width: 8px; height: 8px; background: #00d4aa; border-radius: 50%; }
+
+  .settings { background: #12121e; padding: 10px 20px; display: flex; gap: 12px; border-bottom: 1px solid #1e1e30; flex-wrap: wrap; }
+  .settings label { font-size: 12px; color: #888; display: flex; align-items: center; gap: 6px; }
+  .settings input { background: #1a1a2e; border: 1px solid #2a2a3e; color: #e0e0e0; padding: 4px 10px; border-radius: 4px; font-size: 13px; width: 140px; }
+
+  #chat { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+  #chat::-webkit-scrollbar { width: 6px; }
+  #chat::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
+  .msg { max-width: 75%; display: flex; flex-direction: column; gap: 4px; }
+  .msg.user { align-self: flex-end; }
+  .msg.assistant { align-self: flex-start; }
+  .msg .label { font-size: 11px; color: #666; padding: 0 4px; }
+  .msg.user .label { text-align: right; }
+  .msg .bubble { padding: 10px 14px; border-radius: 12px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  .msg.user .bubble { background: #00d4aa; color: #0f0f0f; border-bottom-right-radius: 4px; }
+  .msg.assistant .bubble { background: #1a1a2e; border: 1px solid #2a2a3e; border-bottom-left-radius: 4px; }
+
+  .typing { align-self: flex-start; padding: 10px 14px; background: #1a1a2e; border: 1px solid #2a2a3e; border-radius: 12px; display: none; }
+  .typing span { display: inline-block; width: 6px; height: 6px; background: #555; border-radius: 50%; margin: 0 2px; animation: bounce 1.2s infinite; }
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+  @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
+
+  .input-bar { background: #12121e; padding: 12px 20px; border-top: 1px solid #1e1e30; display: flex; gap: 10px; }
+  .input-bar input { flex: 1; background: #1a1a2e; border: 1px solid #2a2a3e; color: #e0e0e0; padding: 10px 14px; border-radius: 8px; font-size: 14px; outline: none; }
+  .input-bar input:focus { border-color: #00d4aa; }
+  .input-bar button { background: #00d4aa; color: #0f0f0f; border: none; padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .input-bar button:hover { background: #00b892; }
+  .input-bar button:disabled { background: #333; color: #666; cursor: not-allowed; }
+
+  .welcome { text-align: center; color: #555; margin: auto; font-size: 14px; }
+  .welcome h2 { color: #00d4aa; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">A</div>
+  <div class="info">
+    <h1>Alex - Support Agent</h1>
+    <span>Local AI Customer Support</span>
+  </div>
+  <div class="status" id="status">Connected</div>
+</header>
+
+<div class="settings">
+  <label>Customer ID <input type="text" id="customerId" placeholder="e.g. cust-001" value="web-user"></label>
+  <label>Session <input type="text" id="sessionId" placeholder="e.g. sess-1" value=""></label>
+</div>
+
+<div id="chat">
+  <div class="welcome">
+    <h2>How can I help you today?</h2>
+    <p>Ask about policies, report an issue, or check on a ticket.</p>
+  </div>
+</div>
+
+<div class="typing" id="typing">
+  <span></span><span></span><span></span>
+</div>
+
+<div class="input-bar">
+  <input type="text" id="messageInput" placeholder="Type your message..." autofocus>
+  <button id="sendBtn" onclick="send()">Send</button>
+</div>
+
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('messageInput');
+const sendBtn = document.getElementById('sendBtn');
+const typing = document.getElementById('typing');
+const sessionInput = document.getElementById('sessionId');
+
+let welcomeRemoved = false;
+
+function removeWelcome() {
+  if (!welcomeRemoved) {
+    const w = chat.querySelector('.welcome');
+    if (w) w.remove();
+    welcomeRemoved = true;
+  }
+}
+
+function addMessage(role, text) {
+  removeWelcome();
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.innerHTML = `
+    <div class="label">${role === 'user' ? 'You' : 'Alex'}</div>
+    <div class="bubble">${escapeHtml(text)}</div>
+  `;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function escapeHtml(text) {
+  const d = document.createElement('div');
+  d.textContent = text;
+  return d.innerHTML;
+}
+
+function generateSessionId() {
+  return 'web-' + Math.random().toString(36).substring(2, 8);
+}
+
+async function send() {
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  let sessionId = sessionInput.value.trim();
+  if (!sessionId) {
+    sessionId = generateSessionId();
+    sessionInput.value = sessionId;
+  }
+
+  const customerId = document.getElementById('customerId').value.trim() || undefined;
+
+  addMessage('user', msg);
+  input.value = '';
+  sendBtn.disabled = true;
+  typing.style.display = 'flex';
+  chat.scrollTop = chat.scrollHeight;
+
+  try {
+    const body = { message: msg, conversation_id: sessionId };
+    if (customerId) body.customer_id = customerId;
+
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const data = await res.json();
+    addMessage('assistant', data.reply);
+  } catch (err) {
+    addMessage('assistant', 'Error: Could not reach the server. Is llama-server running?');
+  } finally {
+    typing.style.display = 'none';
+    sendBtn.disabled = false;
+    input.focus();
+  }
+}
+
+input.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    send();
+  }
+});
+
+input.focus();
+</script>
+</body>
+</html>

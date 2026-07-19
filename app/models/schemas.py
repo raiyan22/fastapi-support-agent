@@ -26,6 +26,7 @@ class ConversationDB(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     session_id: Mapped[str] = mapped_column(String(50), index=True)
+    customer_id: Mapped[Optional[str]] = mapped_column(String(50), index=True, nullable=True)
     ticket_id: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     user_message: Mapped[str] = mapped_column(Text)
     assistant_message: Mapped[str] = mapped_column(Text)
@@ -62,6 +63,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
+    customer_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
